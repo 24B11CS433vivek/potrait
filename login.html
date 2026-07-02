@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Graphite & Co.</title>
+<meta name="description" content="Login to track your portrait order or manage your dashboard.">
+<link rel="icon" href="pradeep.png">
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
+<style>
+/* ── Login page specific ── */
+.login-wrap {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  position: relative;
+}
+
+/* Left — art panel */
+.login-art {
+  background: var(--ink);
+  color: var(--bg);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-art::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 27px,
+      rgba(255,255,255,0.04) 27px,
+      rgba(255,255,255,0.04) 28px
+    );
+  pointer-events: none;
+}
+
+.login-art::after {
+  content: '✏';
+  position: absolute;
+  font-size: 320px;
+  opacity: .04;
+  bottom: -40px;
+  right: -40px;
+  line-height: 1;
+  pointer-events: none;
+  transform: rotate(-20deg);
+}
+
+.login-art-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: var(--bg);
+}
+
+.login-art-brand img {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255,255,255,.3);
+}
+
+.login-art-brand span {
+  font-family: 'Fraunces', serif;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.login-art-quote {
+  position: relative;
+  z-index: 1;
+}
+
+.login-art-quote blockquote {
+  font-family: 'Fraunces', serif;
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0 0 16px;
+  letter-spacing: -.01em;
+}
+
+.login-art-quote cite {
+  font-size: 13px;
+  opacity: .5;
+  font-style: normal;
+  font-family: 'IBM Plex Mono', monospace;
+  letter-spacing: .05em;
+}
+
+.login-art-steps {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-art-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  opacity: .7;
+}
+
+.login-art-step-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* Right — form panel */
+.login-form-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 48px 40px;
+  background: var(--bg);
+  position: relative;
+  overflow-y: auto;
+}
+
+.login-form-side::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 27px,
+      rgba(180,176,168,0.1) 27px,
+      rgba(180,176,168,0.1) 28px
+    );
+  pointer-events: none;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Tabs */
+.auth-tabs {
+  display: flex;
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 28px;
+  box-shadow: var(--sketch-shadow);
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 11px;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--paper);
+  color: var(--ink-soft);
+  border: none;
+  transition: .15s;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: .02em;
+}
+
+.auth-tab.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+/* Password strength */
+.pw-strength {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-soft);
+  margin-top: -14px;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.pw-strength-bar {
+  height: 100%;
+  width: 0%;
+  transition: width .3s, background .3s;
+  border-radius: 2px;
+}
+
+/* Show/hide password toggle */
+.pw-wrap {
+  position: relative;
+}
+
+.pw-wrap input {
+  padding-right: 44px;
+}
+
+.pw-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-70%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--ink-lighter);
+  padding: 4px;
+  line-height: 1;
+  z-index: 2;
+}
+
+.pw-toggle:hover { color: var(--ink); }
+
+/* Divider with text */
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--ink-lighter);
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.or-divider::before,
+.or-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* Social/quick links */
+.quick-links {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 768px) {
+  .login-wrap { grid-template-columns: 1fr; }
+  .login-art {
+    display: none;
+  }
+  .login-form-side {
+    min-height: 100vh;
+    padding: 32px 20px;
+  }
+  .login-card { max-width: 100%; }
+}
+</style>
+</head>
+<body style="background:var(--bg);margin:0;">
+
+<!-- Toast -->
+<div id="toastBox" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;"></div>
+
+<div class="login-wrap">
+
+  <!-- ── LEFT ART PANEL ── -->
+  <div class="login-art">
+    <a class="login-art-brand" href="index.html">
+      <img src="pradeep.png" alt="logo" onerror="this.style.display='none'">
+      <span>Graphite & Co.</span>
+    </a>
+
+    <div class="login-art-quote">
+      <blockquote id="artQuote">"Every portrait that is painted with feeling is a portrait of the artist, not of the sitter."</blockquote>
+      <cite id="artCite">— Oscar Wilde</cite>
+      <div style="margin-top:24px;font-size:13px;opacity:.5;font-family:'IBM Plex Mono',monospace;">
+        Hand-drawn pencil portraits, made to order.
+      </div>
+    </div>
+
+    <div class="login-art-steps">
+      <div style="font-size:11px;opacity:.4;text-transform:uppercase;letter-spacing:.1em;
+                  font-family:'IBM Plex Mono',monospace;margin-bottom:4px;">How it works</div>
+      ${[
+        ['📷','Upload your photo'],
+        ['⚙️','Choose size & detail'],
+        ['✅','Artist confirms & draws'],
+        ['💳','Pay by UPI — track everything'],
+        ['📦','Portrait shipped to your door']
+      ].map(([icon,label])=>`
+        <div class="login-art-step">
+          <div class="login-art-step-dot">${icon}</div>
+          <span>${label}</span>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- ── RIGHT FORM PANEL ── -->
+  <div class="login-form-side">
+    <div class="login-card">
+
+      <!-- Back link -->
+      <a href="index.html" style="display:inline-flex;align-items:center;gap:6px;
+         text-decoration:none;color:var(--ink-soft);font-size:13px;font-weight:600;
+         margin-bottom:28px;transition:color .15s;"
+         onmouseover="this.style.color='var(--ink)'"
+         onmouseout="this.style.color='var(--ink-soft)'">
+        ← Back to site
+      </a>
+
+      <h2 style="margin-bottom:4px;">Welcome back</h2>
+      <p class="small" style="margin-bottom:24px;">
+        Log in to track orders, pay and manage your dashboard.
+      </p>
+
+      <!-- Auth tabs -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tabLogin" onclick="switchTab('login')">Log in</button>
+        <button class="auth-tab" id="tabReset" onclick="switchTab('reset')">Forgot password</button>
+      </div>
+
+      <!-- ── LOGIN FORM ── -->
+      <div id="loginPanel">
+        <div id="loginMsg" class="msg"></div>
+
+        <form id="loginForm" novalidate>
+          <label>Email</label>
+          <input type="email" id="loginEmail" placeholder="your@email.com"
+                 autocomplete="email" required>
+
+          <label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="loginPass" placeholder="Your password"
+                   autocomplete="current-password" required>
+            <button type="button" class="pw-toggle" id="toggleLoginPw"
+                    onclick="togglePw('loginPass','toggleLoginPw')" title="Show/hide">👁</button>
+          </div>
+
+          <button type="submit" class="btn btn-accent btn-block" id="loginBtn">
+            Log in
+          </button>
+        </form>
+
+        <div class="or-divider">or</div>
+
+        <div class="quick-links">
+          <a href="index.html#book" class="btn btn-outline btn-block">
+            ✏️ New here? Book a portrait
+          </a>
+          <a id="waLoginBtn" href="#" target="_blank" class="btn btn-ghost btn-block">
+            💬 WhatsApp us for help
+          </a>
+          <a id="callLoginBtn" href="tel:+919182262751" class="btn btn-ghost btn-block">
+            📞 Call us — +91 91822 62751
+          </a>
+        </div>
+
+        <p class="tiny" style="margin-top:20px;text-align:center;line-height:1.7;">
+          Booked a portrait? Use the email & password you set during booking.<br>
+          <button onclick="switchTab('reset')"
+            style="background:none;border:none;color:var(--ink);font-size:11.5px;
+                   cursor:pointer;text-decoration:underline;padding:0;font-family:'IBM Plex Mono',monospace;">
+            Forgot your password?
+          </button>
+        </p>
+      </div>
+
+      <!-- ── RESET PASSWORD FORM ── -->
+      <div id="resetPanel" class="hidden">
+        <div id="resetMsg" class="msg"></div>
+
+        <p class="small" style="margin-bottom:20px;">
+          Enter your email and we'll send you a password reset link.
+        </p>
+
+        <form id="resetForm" novalidate>
+          <label>Email</label>
+          <input type="email" id="resetEmail" placeholder="your@email.com"
+                 autocomplete="email" required>
+          <button type="submit" class="btn btn-accent btn-block" id="resetBtn">
+            Send reset link
+          </button>
+        </form>
+
+        <div class="or-divider">or</div>
+
+        <button onclick="switchTab('login')" class="btn btn-outline btn-block">
+          ← Back to login
+        </button>
+
+        <p class="tiny" style="margin-top:16px;text-align:center;line-height:1.7;">
+          If you don't get the email, check spam or
+          <a id="waResetBtn" href="#" target="_blank"
+             style="color:var(--ink);text-decoration:underline;">contact us on WhatsApp</a>.
+        </p>
+      </div>
+
+      <!-- Footer note -->
+      <div style="margin-top:32px;padding-top:20px;border-top:1px solid var(--line);">
+        <p class="tiny" style="text-align:center;line-height:1.8;">
+          © <span id="year"></span> Graphite & Co. ·
+          <a href="index.html" style="color:inherit;text-decoration:underline;">Home</a> ·
+          <a href="index.html#gallery" style="color:inherit;text-decoration:underline;">Gallery</a> ·
+          <a href="index.html#book" style="color:inherit;text-decoration:underline;">Book a portrait</a>
+        </p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Helpers ────────────────────────────────────────────────
+function g(id){ return document.getElementById(id); }
+
+function showMsg(id, type, html){
+  const el=g(id); if(!el) return;
+  el.className=`msg show ${type}`;
+  el.innerHTML=html;
+  if(type==='ok') setTimeout(()=>{ if(el) el.className='msg'; },5000);
+}
+
+function clearMsg(id){
+  const el=g(id); if(el){ el.className='msg'; el.textContent=''; }
+}
+
+function toast(text,type='ok'){
+  const t=document.createElement('div');
+  t.style.cssText=`padding:10px 22px;border-radius:4px;font-size:13px;font-weight:600;
+    pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.12);border:1.5px solid;
+    animation:modal-in .2s ease;max-width:90vw;text-align:center;
+    ${type==='ok'
+      ?'background:#f0f8f0;color:#2A5A2A;border-color:#2A5A2A;'
+      :'background:#f8f0f0;color:#7A2020;border-color:#7A2020;'}`;
+  t.textContent=text;
+  g('toastBox').appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},3500);
+}
+
+function setLoading(btnId,loading,text){
+  const b=g(btnId); if(!b) return;
+  b.disabled=loading;
+  b.innerHTML=loading?'<span class="spinner"></span> '+text:text;
+}
+
+// ── Year ───────────────────────────────────────────────────
+g('year').textContent=new Date().getFullYear();
+
+// ── Rotating quotes ────────────────────────────────────────
+const QUOTES=[
+  {q:'"Every portrait that is painted with feeling is a portrait of the artist, not of the sitter."',c:'— Oscar Wilde'},
+  {q:'"A portrait is not made in the camera but on either side of it."',c:'— Edward Steichen'},
+  {q:'"To draw, you must close your eyes and sing."',c:'— Pablo Picasso'},
+  {q:'"The job of the artist is always to deepen the mystery."',c:'— Francis Bacon'},
+  {q:'"Art enables us to find ourselves and lose ourselves at the same time."',c:'— Thomas Merton'},
+  {q:'"Creativity takes courage."',c:'— Henri Matisse'}
+];
+const rq=QUOTES[Math.floor(Math.random()*QUOTES.length)];
+if(g('artQuote')) g('artQuote').textContent=rq.q;
+if(g('artCite'))  g('artCite').textContent=rq.c;
+
+// ── Social links ───────────────────────────────────────────
+(async()=>{
+  let s=SITE;
+  try{
+    const d=await db.collection('settings').doc('social').get();
+    if(d.exists) s={...SITE,...d.data()};
+  }catch(e){}
+  const waUrl=waLink(s.whatsapp,'Hi! I need help logging into my portrait order account.');
+  g('waLoginBtn').href=waUrl;
+  if(g('waResetBtn')) g('waResetBtn').href=waUrl;
+  g('callLoginBtn').href='tel:'+s.callNumber;
+})();
+
+// ── Tab switching ──────────────────────────────────────────
+function switchTab(tab){
+  const isLogin=tab==='login';
+  g('tabLogin').classList.toggle('active',isLogin);
+  g('tabReset').classList.toggle('active',!isLogin);
+  g('loginPanel').classList.toggle('hidden',!isLogin);
+  g('resetPanel').classList.toggle('hidden',isLogin);
+  clearMsg('loginMsg');
+  clearMsg('resetMsg');
+
+  // Copy email between forms
+  if(!isLogin && g('loginEmail').value){
+    g('resetEmail').value=g('loginEmail').value;
+  }
+  if(isLogin && g('resetEmail').value){
+    g('loginEmail').value=g('resetEmail').value;
+  }
+
+  // Focus
+  setTimeout(()=>{
+    (isLogin?g('loginEmail'):g('resetEmail')).focus();
+  },50);
+}
+
+// ── Show/hide password ─────────────────────────────────────
+function togglePw(inputId, btnId){
+  const inp=g(inputId), btn=g(btnId);
+  if(!inp||!btn) return;
+  const isHidden=inp.type==='password';
+  inp.type=isHidden?'text':'password';
+  btn.textContent=isHidden?'🙈':'👁';
+  btn.title=isHidden?'Hide password':'Show password';
+}
+
+// ── Error message mapper ───────────────────────────────────
+function friendlyError(code){
+  const map={
+    'auth/user-not-found':      'No account found with this email. <a href="index.html#book" style="color:inherit;text-decoration:underline;">Book a portrait</a> to create one.',
+    'auth/wrong-password':      'Incorrect password. Try again or reset it.',
+    'auth/invalid-credential':  'Incorrect email or password.',
+    'auth/invalid-email':       'Invalid email address.',
+    'auth/too-many-requests':   'Too many failed attempts. Try again later or reset your password.',
+    'auth/network-request-failed': 'Network error — check your connection.',
+    'auth/user-disabled':       'This account has been disabled. Contact us for help.'
+  };
+  return map[code]||null;
+}
+
+// ── Auth state — redirect if already logged in ─────────────
+auth.onAuthStateChanged(user=>{
+  if(user){
+    // Already logged in — redirect straight to dashboard
+    showMsg('loginMsg','ok','Already logged in — redirecting…');
+    setTimeout(()=>location.href='dashboard.html',800);
+  }
+});
+
+// ── LOGIN ──────────────────────────────────────────────────
+g('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  clearMsg('loginMsg');
+
+  const email=g('loginEmail').value.trim();
+  const pass=g('loginPass').value;
+
+  if(!email){ showMsg('loginMsg','err','Enter your email.'); g('loginEmail').focus(); return; }
+  if(!pass){  showMsg('loginMsg','err','Enter your password.'); g('loginPass').focus(); return; }
+
+  setLoading('loginBtn',true,'Logging in…');
+
+  try{
+    await auth.signInWithEmailAndPassword(email,pass);
+    showMsg('loginMsg','ok','✅ Logged in! Redirecting…');
+    setTimeout(()=>location.href='dashboard.html',700);
+  }catch(err){
+    const friendly=friendlyError(err.code);
+    showMsg('loginMsg','err',
+      friendly||err.message||'Login failed. Please try again.'
+    );
+    setLoading('loginBtn',false,'Log in');
+
+    // Shake the form on error
+    const form=g('loginForm');
+    form.style.animation='none';
+    setTimeout(()=>{
+      form.style.animation='shake .4s ease';
+    },10);
+  }
+});
+
+// ── RESET PASSWORD ─────────────────────────────────────────
+g('resetForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  clearMsg('resetMsg');
+
+  const email=g('resetEmail').value.trim();
+  if(!email){ showMsg('resetMsg','err','Enter your email address.'); g('resetEmail').focus(); return; }
+
+  // Basic email validation
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    showMsg('resetMsg','err','Enter a valid email address.');
+    return;
+  }
+
+  setLoading('resetBtn',true,'Sending…');
+
+  try{
+    await auth.sendPasswordResetEmail(email);
+    showMsg('resetMsg','ok',
+      `✅ Reset link sent to <strong>${email}</strong>.<br>
+       <span style="font-size:12px;opacity:.8;">Check your inbox and spam folder. Link expires in 1 hour.</span>`
+    );
+    setLoading('resetBtn',false,'Send reset link');
+    g('resetEmail').value='';
+    toast('Reset email sent!','ok');
+  }catch(err){
+    const friendly=friendlyError(err.code);
+    showMsg('resetMsg','err',
+      friendly||err.message||'Could not send reset email.'
+    );
+    setLoading('resetBtn',false,'Send reset link');
+  }
+});
+
+// ── Keyboard shortcuts ─────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  // Alt+L = login tab, Alt+R = reset tab
+  if(e.altKey&&e.key==='l') switchTab('login');
+  if(e.altKey&&e.key==='r') switchTab('reset');
+});
+
+// ── Shake animation ────────────────────────────────────────
+const shakeStyle=document.createElement('style');
+shakeStyle.textContent=`
+  @keyframes shake {
+    0%,100%{transform:translateX(0);}
+    20%{transform:translateX(-6px);}
+    40%{transform:translateX(6px);}
+    60%{transform:translateX(-4px);}
+    80%{transform:translateX(4px);}
+  }
+`;
+document.head.appendChild(shakeStyle);
+
+// ── Auto-fill email from URL param ────────────────────────
+// e.g. login.html?email=user@example.com
+const urlParams=new URLSearchParams(location.search);
+const prefillEmail=urlParams.get('email');
+if(prefillEmail){
+  g('loginEmail').value=decodeURIComponent(prefillEmail);
+  g('loginPass').focus();
+}
+
+// ── Check for redirect message ────────────────────────────
+// e.g. login.html?msg=reset — show a notice
+const urlMsg=urlParams.get('msg');
+if(urlMsg==='reset'){
+  showMsg('loginMsg','info','Check your email for the reset link, then log in with your new password.');
+}
+if(urlMsg==='logout'){
+  showMsg('loginMsg','ok','You\'ve been logged out successfully.');
+}
+</script>
+</body>
+</html>

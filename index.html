@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Graphite & Co. — Custom Pencil Portraits</title>
+<meta name="description" content="Hand-drawn pencil portraits, made to order. Upload a photo, pick a size, and we'll turn it into art.">
+<link rel="icon" href="pradeep.png">
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+
+<!-- SVG filter for sketch effect -->
+<svg style="position:absolute;width:0;height:0;" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sketch-filter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="5" seed="2" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+</svg>
+
+<!-- Toast -->
+<div id="toastBox" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;"></div>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="pradeep.png" alt="Graphite & Co." onerror="this.style.display='none'">
+      <span>Graphite & Co.</span>
+    </a>
+    <button class="nav-toggle" id="navToggle" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-links" id="navLinks">
+      <a href="#gallery">Gallery</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#howworks">How it works</a>
+      <a href="#book">Book</a>
+      <a href="login.html" class="btn btn-outline btn-sm">Login</a>
+      <a href="#book" class="btn btn-accent btn-sm">Book now</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Pencil portraits, made to order</span>
+    <h1>
+      <span class="stroke-wrap">Your photo,
+        <svg class="stroke" viewBox="0 0 340 18" preserveAspectRatio="none">
+          <path d="M2 12 Q 60 3, 120 10 T 240 8 T 338 7"/>
+        </svg>
+      </span><br>
+      hand-drawn in graphite.
+    </h1>
+    <p class="lead">Upload a reference photo, choose your size and detail level — get a one-of-a-kind pencil portrait priced instantly, paid by UPI, drawn by a real artist.</p>
+    <div class="hero-actions">
+      <a href="#book" class="btn btn-accent">✏️ Start your portrait</a>
+      <a id="callBtn" href="tel:+919182262751" class="btn btn-outline">📞 Call now</a>
+    </div>
+
+    <!-- Hero stats -->
+    <div style="display:flex;gap:32px;margin-top:48px;flex-wrap:wrap;">
+      <div>
+        <div style="font-family:'Fraunces',serif;font-size:28px;font-weight:700;" id="statOrders">—</div>
+        <div class="tiny">Portraits delivered</div>
+      </div>
+      <div style="width:1px;background:var(--line);"></div>
+      <div>
+        <div style="font-family:'Fraunces',serif;font-size:28px;font-weight:700;" id="statArtists">—</div>
+        <div class="tiny">Artists</div>
+      </div>
+      <div style="width:1px;background:var(--line);"></div>
+      <div>
+        <div style="font-family:'Fraunces',serif;font-size:28px;font-weight:700;">A2–A4</div>
+        <div class="tiny">Sizes available</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- GALLERY -->
+<section id="gallery">
+  <div class="wrap" style="position:relative;">
+    <span class="section-num">01</span>
+    <div class="section-head">
+      <div>
+        <span class="section-label">Recent work</span>
+        <h2>From our artists</h2>
+        <p>Every portrait is drawn to order — nothing here is a print or a filter.</p>
+      </div>
+      <a href="#book" class="btn btn-outline btn-sm">Book yours →</a>
+    </div>
+    <div class="pills" id="artistFilters">
+      <button class="pill active" data-filter="all">All artists</button>
+    </div>
+    <div class="gallery" id="galleryGrid">
+      <div class="skeleton" style="height:280px;border-radius:4px;"></div>
+      <div class="skeleton" style="height:280px;border-radius:4px;"></div>
+      <div class="skeleton" style="height:280px;border-radius:4px;"></div>
+      <div class="skeleton" style="height:280px;border-radius:4px;"></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="wrap" style="position:relative;">
+    <span class="section-num">02</span>
+    <div class="section-head">
+      <div>
+        <span class="section-label">Transparent pricing</span>
+        <h2>What it costs</h2>
+        <p>Base price by size and detail. Extra faces add a percentage on top. Calculated instantly in the form.</p>
+      </div>
+    </div>
+    <div id="pricingGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- HOW IT WORKS -->
+<section id="howworks">
+  <div class="wrap" style="position:relative;">
+    <span class="section-num">03</span>
+    <div class="section-head">
+      <div>
+        <span class="section-label">Simple process</span>
+        <h2>How it works</h2>
+        <p>From photo to finished portrait — here's the full journey.</p>
+      </div>
+    </div>
+    <div id="stepsGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- BOOKING FORM -->
+<section id="book">
+  <div class="wrap" style="position:relative;">
+    <span class="section-num">04</span>
+    <div class="section-head">
+      <div>
+        <span class="section-label">Get started</span>
+        <h2>Book your portrait</h2>
+        <p>Fill this in once — creates your account automatically so you can track &amp; pay later.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- FORM -->
+      <div class="panel">
+        <form id="bookingForm" novalidate>
+          <div id="bookMsg" class="msg"></div>
+
+          <!-- Upload -->
+          <label>Reference photo *</label>
+          <div class="upload-box" id="uploadBox">
+            <span class="upload-icon" id="uploadIcon">📷</span>
+            <div id="uploadPrompt">
+              <strong>Click to upload</strong><br>
+              <span class="tiny">JPG, PNG, HEIC — the photo you want drawn</span>
+            </div>
+            <img id="uploadPreview" class="preview hidden">
+          </div>
+          <input type="file" id="fileInput" accept="image/*" class="hidden">
+
+          <!-- Artist -->
+          <label>Artist *</label>
+          <select id="artistSelect">
+            <option value="">Loading artists…</option>
+          </select>
+
+          <!-- Size -->
+          <label>Size *</label>
+          <div class="option-grid" id="sizeOptions"></div>
+
+          <!-- Detail -->
+          <label>Detail level *</label>
+          <div class="option-grid" id="tierOptions">
+            <div class="option-chip" data-tier="low">
+              Low<br><span class="tiny" style="color:var(--ink-lighter);">simple sketch</span>
+            </div>
+            <div class="option-chip" data-tier="medium">
+              Medium<br><span class="tiny" style="color:var(--ink-lighter);">shaded</span>
+            </div>
+            <div class="option-chip" data-tier="high">
+              High<br><span class="tiny" style="color:var(--ink-lighter);">photorealistic</span>
+            </div>
+          </div>
+
+          <!-- Faces -->
+          <label>Number of faces *</label>
+          <div class="option-grid" id="faceOptions"></div>
+
+          <!-- Price -->
+          <div class="price-display" id="priceDisplay">
+            <div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;opacity:.6;font-weight:700;">Estimated price</div>
+              <div style="font-size:11px;opacity:.5;margin-top:2px;">Select all options above</div>
+            </div>
+            <span class="amount mono" id="priceOut">₹—</span>
+          </div>
+
+          <!-- Customer details -->
+          <div class="sketch-sep"></div>
+          <div style="font-family:'Caveat',cursive;font-size:16px;color:var(--ink-soft);margin-bottom:16px;">Your details</div>
+
+          <div class="field-row">
+            <div><label>Full name *</label><input id="custName" placeholder="Your full name" required></div>
+            <div><label>Phone *</label><input id="custPhone" type="tel" placeholder="+91 XXXXX XXXXX" required></div>
+          </div>
+          <div class="field-row">
+            <div><label>Email *</label><input id="custEmail" type="email" placeholder="your@email.com" required></div>
+            <div><label>Password *</label><input id="custPass" type="password" minlength="6" placeholder="Min 6 characters" required></div>
+          </div>
+          <label>Delivery address *</label>
+          <textarea id="custAddress" placeholder="Full address where the portrait should be shipped" required></textarea>
+          <label>Notes for artist <span style="font-weight:400;text-transform:none;">(optional)</span></label>
+          <textarea id="custNotes" placeholder="Background preference, occasion, style notes, etc." style="min-height:70px;"></textarea>
+
+          <p class="hint">Submitting creates your account. You'll be redirected to your dashboard to track the order and pay when ready.</p>
+
+          <button type="submit" class="btn btn-accent btn-block" id="submitBtn">
+            ✏️ Submit booking
+          </button>
+        </form>
+      </div>
+
+      <!-- SIDEBAR -->
+      <div id="sidebarContent"></div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="font-family:'Fraunces',serif;font-weight:700;font-size:18px;">Graphite &amp; Co.</div>
+      <div class="tiny">Hand-drawn pencil portraits, made to order.</div>
+      <div class="tiny">&copy; <span id="year"></span> Graphite &amp; Co. All rights reserved.</div>
+    </div>
+    <div class="socials">
+      <a id="igFoot" href="#" target="_blank">Instagram</a>
+      <a id="waFoot" href="#" target="_blank">WhatsApp</a>
+      <a id="ytFoot" href="#" target="_blank" class="hidden">YouTube</a>
+      <a href="login.html">Login</a>
+      <a href="#book">Book</a>
+    </div>
+  </div>
+</footer>
+
+<!-- Floating call -->
+<a href="tel:+919182262751" class="float-call" id="floatCall" title="Call us now">📞</a>
+
+<!-- Lightbox -->
+<div id="lightbox" class="hidden" style="position:fixed;inset:0;background:rgba(247,245,240,.92);
+  backdrop-filter:blur(4px);z-index:150;display:flex;align-items:center;justify-content:center;
+  padding:24px;cursor:pointer;">
+  <div style="position:relative;max-width:90vw;max-height:90vh;cursor:default;" onclick="event.stopPropagation()">
+    <button onclick="closeLB()" style="position:absolute;top:-44px;right:0;background:var(--paper);
+      border:1.5px solid var(--ink);width:36px;height:36px;border-radius:4px;cursor:pointer;
+      font-size:18px;display:flex;align-items:center;justify-content:center;
+      box-shadow:var(--sketch-shadow);">×</button>
+    <img id="lbImg" style="max-width:90vw;max-height:80vh;object-fit:contain;
+      border:2px solid var(--ink);border-radius:4px;box-shadow:var(--shadow-lift);">
+    <div id="lbMeta" style="background:var(--paper);border:1.5px solid var(--line);
+      border-top:none;padding:12px 16px;border-radius:0 0 4px 4px;"></div>
+  </div>
+</div>
+
+<script>
+// ── Helpers ────────────────────────────────────────────────
+function g(id){ return document.getElementById(id); }
+
+function toast(text,type){
+  type=type||'ok';
+  var t=document.createElement('div');
+  t.style.cssText='padding:10px 22px;border-radius:4px;font-size:13px;font-weight:600;'+
+    'pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.12);border:1.5px solid;'+
+    'max-width:90vw;text-align:center;animation:modal-in .2s ease;'+
+    (type==='ok'?'background:#f0f8f0;color:#2A5A2A;border-color:#2A5A2A;'
+    :'background:#f8f0f0;color:#7A2020;border-color:#7A2020;');
+  t.textContent=text;
+  g('toastBox').appendChild(t);
+  setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';
+    setTimeout(function(){t.remove();},300);},3000);
+}
+
+function showMsg(id,type,text){
+  var el=g(id);if(!el)return;
+  el.className='msg show '+type;
+  el.innerHTML=text;
+}
+
+// ── Nav toggle ─────────────────────────────────────────────
+g('navToggle').onclick=function(){g('navLinks').classList.toggle('open');};
+document.addEventListener('click',function(e){
+  if(!e.target.closest('nav')) g('navLinks').classList.remove('open');
+});
+
+// ── Year ───────────────────────────────────────────────────
+g('year').textContent=new Date().getFullYear();
+
+// ── Lightbox ───────────────────────────────────────────────
+function openLB(src,title,tag){
+  g('lbImg').src=src;
+  g('lbMeta').innerHTML='<strong style="font-family:Fraunces,serif;">'+(title||'Portrait')+'</strong>'+
+    (tag?'<span class="tiny" style="margin-left:8px;">'+tag+'</span>':'');
+  g('lightbox').classList.remove('hidden');
+  g('lightbox').style.display='flex';
+  document.body.style.overflow='hidden';
+}
+function closeLB(){
+  g('lightbox').classList.add('hidden');
+  g('lightbox').style.display='none';
+  document.body.style.overflow='';
+}
+g('lightbox').onclick=function(e){if(e.target===g('lightbox'))closeLB();};
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeLB();});
+
+// ── State ──────────────────────────────────────────────────
+var pricing=DEFAULT_PRICING;
+var selectedFile=null;
+var state={size:null,tier:null,faces:null,artistId:null,artistName:null};
+var allPortraits=[];
+
+// ── Render "How it works" steps ────────────────────────────
+(function renderSteps(){
+  var steps=[
+    ['📷','Upload your photo','Pick the reference image you want turned into art.'],
+    ['⚙️','Choose options','Size, detail level and number of faces — price shows instantly.'],
+    ['✅','Artist confirms','We review and confirm your order, usually within hours.'],
+    ['💳','Pay by UPI','Scan the QR in your dashboard and pay the exact amount.'],
+    ['🎨','We draw it','Artist works on your portrait — you can track progress.'],
+    ['📦','Shipped to you','Finished portrait delivered to your door.']
+  ];
+  var html='';
+  steps.forEach(function(s,i){
+    html+='<div class="panel" style="text-align:center;position:relative;">'+
+      '<div style="font-size:36px;margin-bottom:12px;">'+s[0]+'</div>'+
+      '<div style="font-family:Caveat,cursive;font-size:13px;color:var(--ink-lighter);margin-bottom:4px;">Step '+(i+1)+'</div>'+
+      '<h4 style="margin-bottom:6px;">'+s[1]+'</h4>'+
+      '<p class="small" style="margin:0;">'+s[2]+'</p></div>';
+  });
+  g('stepsGrid').innerHTML=html;
+})();
+
+// ── Render sidebar ─────────────────────────────────────────
+(function renderSidebar(){
+  var features=[
+    ['✏️','Hand-drawn by a real artist — no AI, no filters'],
+    ['💰','Transparent pricing — calculated before you submit'],
+    ['📱','Track everything from your dashboard'],
+    ['💳','Pay by UPI only after artist confirms'],
+    ['📦','Physical portrait shipped to your door'],
+    ['🔄','Direct communication — call or WhatsApp anytime']
+  ];
+  var featHtml='';
+  features.forEach(function(f){
+    featHtml+='<div style="display:flex;gap:12px;align-items:flex-start;">'+
+      '<span style="font-size:18px;flex-shrink:0;">'+f[0]+'</span>'+
+      '<span class="small" style="margin:0;">'+f[1]+'</span></div>';
+  });
+
+  g('sidebarContent').innerHTML=
+    '<div style="display:flex;flex-direction:column;gap:20px;">'+
+
+    // Contact panel
+    '<div class="panel">'+
+      '<h3>💬 Prefer to just talk?</h3>'+
+      '<p class="small">Call or message us and we\'ll sort out the details together.</p>'+
+      '<div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">'+
+        '<a id="callBtnSide" href="tel:+919182262751" class="btn btn-accent">📞 Call — +91 91822 62751</a>'+
+        '<a id="waBtnSide" href="#" target="_blank" class="btn btn-outline">💬 WhatsApp us</a>'+
+        '<a id="igBtnSide" href="#" target="_blank" class="btn btn-outline">📷 @ravan_arts777</a>'+
+      '</div>'+
+    '</div>'+
+
+    // Features panel
+    '<div class="panel">'+
+      '<h3>🎯 What you get</h3>'+
+      '<div style="display:flex;flex-direction:column;gap:12px;margin-top:12px;">'+
+        featHtml+
+      '</div>'+
+    '</div>'+
+
+    // Price card
+    '<div class="panel" style="background:var(--ink);color:var(--bg);border-color:var(--ink);">'+
+      '<div style="font-family:Caveat,cursive;font-size:14px;opacity:.6;margin-bottom:4px;">Starting from</div>'+
+      '<div style="font-family:Fraunces,serif;font-size:42px;font-weight:700;line-height:1;">₹799</div>'+
+      '<div style="font-size:12px;opacity:.6;margin-top:4px;">A4 · Low detail · 1 face</div>'+
+      '<a href="#book" class="btn btn-paper btn-sm" style="margin-top:16px;display:inline-flex;">Book now →</a>'+
+    '</div>'+
+
+    '</div>';
+})();
+
+// ── Social links ───────────────────────────────────────────
+(async function(){
+  var s=SITE;
+  try{var d=await db.collection('settings').doc('social').get();if(d.exists)s=Object.assign({},SITE,d.data());}catch(e){}
+  if(g('waBtnSide'))g('waBtnSide').href=waLink(s.whatsapp,SITE.whatsappBookingText);
+  if(g('igBtnSide'))g('igBtnSide').href=s.instagram;
+  g('igFoot').href=s.instagram;
+  g('waFoot').href=waLink(s.whatsapp,SITE.whatsappBookingText);
+  g('callBtn').href='tel:'+s.callNumber;
+  if(g('callBtnSide'))g('callBtnSide').href='tel:'+s.callNumber;
+  g('floatCall').href='tel:'+s.callNumber;
+  if(s.youtube){g('ytFoot').href=s.youtube;g('ytFoot').classList.remove('hidden');}
+})();
+
+// ── Stats ──────────────────────────────────────────────────
+(async function(){
+  try{
+    var oS=await db.collection('orders').where('status','==','completed').get();
+    var aS=await db.collection('users').where('role','==','artist').get();
+    g('statOrders').textContent=(oS.size||0)+'+';
+    g('statArtists').textContent=aS.size||'0';
+  }catch(e){}
+})();
+
+// ── Pricing ────────────────────────────────────────────────
+(async function(){
+  pricing=await getPricing();
+  renderSizes();
+  renderFaces();
+  renderPricingGrid();
+})();
+
+function renderSizes(){
+  var box=g('sizeOptions');box.innerHTML='';
+  Object.keys(pricing.base).forEach(function(size){
+    var el=document.createElement('div');
+    el.className='option-chip';el.dataset.size=size;
+    var minP=Math.min.apply(null,Object.values(pricing.base[size]));
+    el.innerHTML=size+'<br><span class="tiny" style="color:var(--ink-lighter);">from ₹'+minP+'</span>';
+    el.onclick=function(){selectChip(box,el);state.size=size;updatePrice();};
+    box.appendChild(el);
+  });
+}
+
+function renderFaces(){
+  var box=g('faceOptions');box.innerHTML='';
+  (pricing.faceOptions||[1,2,3]).forEach(function(f){
+    var el=document.createElement('div');
+    el.className='option-chip';el.dataset.faces=f;
+    el.textContent=f===1?'1 face':f+' faces';
+    el.onclick=function(){selectChip(box,el);state.faces=f;updatePrice();};
+    box.appendChild(el);
+  });
+}
+
+function renderPricingGrid(){
+  var grid=g('pricingGrid');grid.innerHTML='';
+  var entries=Object.entries(pricing.base);
+  entries.forEach(function(entry){
+    var size=entry[0],tiers=entry[1];
+    var card=document.createElement('div');
+    card.className='panel';
+    var rows='';
+    Object.entries(tiers).forEach(function(te){
+      rows+='<div class="spread" style="padding:8px 0;border-bottom:1px solid var(--line-soft);">'+
+        '<span style="text-transform:capitalize;font-size:13px;color:var(--ink-soft);">'+te[0]+'</span>'+
+        '<span class="mono" style="font-weight:700;">₹'+te[1]+'</span></div>';
+    });
+    card.innerHTML='<h3 style="margin-bottom:12px;">'+size+'</h3>'+rows+
+      '<div class="tiny" style="margin-top:10px;font-style:italic;">+'+(pricing.extraFace||60)+'% per extra face</div>';
+    grid.appendChild(card);
+  });
+}
+
+// Tier chips
+g('tierOptions').querySelectorAll('.option-chip').forEach(function(el){
+  el.onclick=function(){selectChip(g('tierOptions'),el);state.tier=el.dataset.tier;updatePrice();};
+});
+
+function selectChip(container,el){
+  container.querySelectorAll('.option-chip').forEach(function(c){c.classList.remove('active');});
+  el.classList.add('active');
+}
+
+function updatePrice(){
+  var out=g('priceOut');
+  var pd=g('priceDisplay');
+  if(state.size&&state.tier&&state.faces){
+    var amt=calculatePrice(pricing,state.size,state.tier,state.faces);
+    out.textContent=amt?'₹'+amt:'₹—';
+    if(amt){pd.style.background='var(--ink)';pd.style.color='var(--bg)';}
+  }else{out.textContent='₹—';}
+}
+
+// ── Artists + Gallery (real-time) ──────────────────────────
+var galleryUnsub=null;
+
+(async function(){
+  var aSelect=g('artistSelect');
+  var fBox=g('artistFilters');
+  var artists=[];
+
+  try{
+    var snap=await db.collection('users').where('role','==','artist').get();
+    snap.forEach(function(doc){
+      var d=doc.data();
+      artists.push({id:doc.id,name:d.name||'Artist'});
+    });
+  }catch(e){}
+
+  // Filter pills
+  fBox.innerHTML='<button class="pill active" data-filter="all">All artists</button>';
+  artists.forEach(function(a){
+    var p=document.createElement('button');
+    p.className='pill';p.dataset.filter=a.id;p.textContent=a.name;
+    p.onclick=function(){filterGallery(a.id,p);};
+    fBox.appendChild(p);
+  });
+  fBox.querySelector('[data-filter="all"]').onclick=function(e){filterGallery('all',e.currentTarget);};
+
+  // Select dropdown
+  aSelect.innerHTML='';
+  if(artists.length===0){
+    aSelect.innerHTML='<option value="">No artists available yet</option>';
+  }else{
+    artists.forEach(function(a){
+      var opt=document.createElement('option');
+      opt.value=a.id;opt.textContent=a.name;
+      aSelect.appendChild(opt);
+    });
+    state.artistId=aSelect.value;
+    state.artistName=aSelect.options[0]?aSelect.options[0].textContent:'';
+  }
+  aSelect.onchange=function(){
+    state.artistId=aSelect.value;
+    state.artistName=aSelect.options[aSelect.selectedIndex]?aSelect.options[aSelect.selectedIndex].textContent:'';
+  };
+
+  loadGallery();
+})();
+
+function loadGallery(){
+  if(galleryUnsub) galleryUnsub();
+  galleryUnsub=db.collection('portraits').onSnapshot(function(snap){
+    allPortraits=[];
+    snap.forEach(function(doc){allPortraits.push(Object.assign({id:doc.id},doc.data()));});
+    allPortraits.sort(function(a,b){
+      return (b.createdAt&&b.createdAt.toMillis?b.createdAt.toMillis():0)
+            -(a.createdAt&&a.createdAt.toMillis?a.createdAt.toMillis():0);
+    });
+    var active=g('artistFilters').querySelector('.pill.active');
+    var filterId=active?active.dataset.filter:'all';
+    renderGallery(filterId);
+  },function(err){
+    g('galleryGrid').innerHTML='<div class="msg show err" style="grid-column:1/-1;">Gallery error: '+err.message+'</div>';
+  });
+}
+
+function renderGallery(filterId){
+  var grid=g('galleryGrid');
+  var items=filterId==='all'?allPortraits:allPortraits.filter(function(p){return p.artistId===filterId;});
+  if(!items.length){
+    grid.innerHTML='<p class="empty-note" style="grid-column:1/-1;">'+
+      (filterId==='all'?'No portraits uploaded yet — check back soon.':'No portraits from this artist yet.')+'</p>';
+    return;
+  }
+  grid.innerHTML='';
+  items.forEach(function(p){
+    var card=document.createElement('div');
+    card.className='card-portrait';
+    card.onclick=function(){
+      openLB(p.imageUrl,p.title||'Custom portrait',
+        (p.size||'')+' · '+(p.tier||'')+' · by '+(p.artistName||'Artist'));
+    };
+    card.innerHTML=
+      '<div class="img-box">'+
+        '<img src="'+p.imageUrl+'" alt="'+(p.title||'Portrait')+'" loading="lazy" '+
+        'onerror="this.parentElement.innerHTML=\'<div style=padding:40px;text-align:center;color:var(--ink-lighter);font-size:24px;>🖼</div>\'">'+
+      '</div>'+
+      '<div class="meta">'+
+        '<div class="title">'+(p.title||'Custom portrait')+'</div>'+
+        '<div class="tag">'+(p.size||'')+' · '+(p.tier||'')+' · '+(p.artistName||'Artist')+'</div>'+
+        (p.price?'<span class="price-tag">₹'+p.price+'</span>':'')+
+        (p.tags&&p.tags.length?'<div class="tag-list">'+p.tags.map(function(t){return '<span class="tag-chip">'+t+'</span>';}).join('')+'</div>':'')+
+      '</div>';
+    grid.appendChild(card);
+  });
+}
+
+function filterGallery(id,btn){
+  g('artistFilters').querySelectorAll('.pill').forEach(function(p){p.classList.remove('active');});
+  btn.classList.add('active');
+  renderGallery(id);
+}
+
+// ── Upload ─────────────────────────────────────────────────
+g('uploadBox').onclick=function(){g('fileInput').click();};
+
+g('fileInput').onchange=function(e){
+  var f=e.target.files[0];if(!f)return;
+  if(f.size>10*1024*1024){toast('File too large — max 10MB','err');return;}
+  selectedFile=f;
+  var r=new FileReader();
+  r.onload=function(ev){
+    g('uploadIcon').classList.add('hidden');
+    g('uploadPrompt').classList.add('hidden');
+    g('uploadPreview').src=ev.target.result;
+    g('uploadPreview').classList.remove('hidden');
+  };
+  r.readAsDataURL(f);
+};
+
+// Drag & drop
+var ub=g('uploadBox');
+ub.addEventListener('dragover',function(e){e.preventDefault();ub.style.borderColor='var(--ink)';});
+ub.addEventListener('dragleave',function(){ub.style.borderColor='';});
+ub.addEventListener('drop',function(e){
+  e.preventDefault();ub.style.borderColor='';
+  var f=e.dataTransfer.files[0];
+  if(f&&f.type.startsWith('image/')){
+    g('fileInput').files=e.dataTransfer.files;
+    g('fileInput').dispatchEvent(new Event('change'));
+  }
+});
+
+// ── Form validation ────────────────────────────────────────
+function validateForm(){
+  var errors=[];
+  if(!selectedFile)errors.push('Upload a reference photo.');
+  if(!state.size)errors.push('Choose a size.');
+  if(!state.tier)errors.push('Choose a detail level.');
+  if(!state.faces)errors.push('Choose number of faces.');
+  if(!state.artistId)errors.push('No artist available.');
+  if(!g('custName').value.trim())errors.push('Enter your name.');
+  if(!g('custPhone').value.trim())errors.push('Enter your phone number.');
+  var email=g('custEmail').value.trim();
+  if(!email)errors.push('Enter your email.');
+  else if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))errors.push('Enter a valid email.');
+  if(g('custPass').value.length<6)errors.push('Password must be 6+ characters.');
+  if(!g('custAddress').value.trim())errors.push('Enter your delivery address.');
+  return errors;
+}
+
+// ── Submit booking ─────────────────────────────────────────
+g('bookingForm').addEventListener('submit',async function(e){
+  e.preventDefault();
+  var msg=g('bookMsg');
+  var btn=g('submitBtn');
+  msg.className='msg';msg.textContent='';
+
+  var errors=validateForm();
+  if(errors.length){
+    showMsg('bookMsg','err','<strong>Please fix:</strong><ul style="margin:6px 0 0;padding-left:18px;">'+
+      errors.map(function(er){return '<li>'+er+'</li>';}).join('')+'</ul>');
+    msg.scrollIntoView({behavior:'smooth',block:'nearest'});
+    return;
+  }
+
+  var name=g('custName').value.trim();
+  var phone=g('custPhone').value.trim();
+  var email=g('custEmail').value.trim();
+  var pass=g('custPass').value;
+  var address=g('custAddress').value.trim();
+  var notes=g('custNotes').value.trim();
+  var amount=calculatePrice(pricing,state.size,state.tier,state.faces);
+
+  btn.disabled=true;
+  btn.innerHTML='<span class="spinner"></span> Uploading photo…';
+
+  try{
+    var refUrl=await uploadToCloudinary(selectedFile,'orders');
+    btn.innerHTML='<span class="spinner"></span> Creating account…';
+
+    var userCred;
+    try{
+      userCred=await auth.createUserWithEmailAndPassword(email,pass);
+    }catch(err){
+      if(err.code==='auth/email-already-in-use'){
+        try{
+          userCred=await auth.signInWithEmailAndPassword(email,pass);
+        }catch(signInErr){
+          throw new Error('Email already registered. Use your original password or log in from the Login page.');
+        }
+      }else{throw err;}
+    }
+    var uid=userCred.user.uid;
+    btn.innerHTML='<span class="spinner"></span> Saving order…';
+
+    await db.collection('users').doc(uid).set({
+      name:name,phone:phone,email:email,role:'customer',
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    },{merge:true});
+
+    await db.collection('orders').add({
+      customerId:uid,customerName:name,customerPhone:phone,customerEmail:email,
+      artistId:state.artistId,artistName:state.artistName,
+      referenceImageUrl:refUrl,
+      size:state.size,tier:state.tier,faces:state.faces,
+      amount:amount,address:address,notes:notes,
+      status:'pending',
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    showMsg('bookMsg','ok','✅ Booking submitted! Redirecting to your dashboard…');
+    btn.innerHTML='✅ Submitted!';
+    toast('Order placed successfully!');
+    setTimeout(function(){location.href='dashboard.html';},1400);
+
+  }catch(err){
+    var errMsg=err.message||'Something went wrong.';
+    if(err.code==='auth/weak-password')errMsg='Password too weak — 6+ characters.';
+    if(err.code==='auth/invalid-email')errMsg='Invalid email address.';
+    showMsg('bookMsg','err',errMsg);
+    msg.scrollIntoView({behavior:'smooth',block:'nearest'});
+    btn.disabled=false;btn.textContent='✏️ Submit booking';
+  }
+});
+
+// ── Auth check ─────────────────────────────────────────────
+auth.onAuthStateChanged(function(user){
+  if(user){
+    var hint=g('bookingForm').querySelector('.hint');
+    if(hint){
+      hint.innerHTML='Logged in as <strong>'+user.email+'</strong>. '+
+        '<a href="dashboard.html" style="color:var(--ink);text-decoration:underline;">Go to dashboard →</a> '+
+        'or book another portrait below.';
+    }
+  }
+});
+
+// ── Scroll nav highlight ───────────────────────────────────
+var sectionIds=['gallery','pricing','howworks','book'];
+var navAs=document.querySelectorAll('.nav-links a[href^="#"]');
+window.addEventListener('scroll',function(){
+  var cur='';
+  sectionIds.forEach(function(id){
+    var el=document.getElementById(id);
+    if(el&&window.scrollY>=el.offsetTop-120)cur=id;
+  });
+  navAs.forEach(function(a){
+    a.style.color=a.getAttribute('href')==='#'+cur?'var(--ink)':'';
+  });
+},{passive:true});
+
+// ── Section animations ─────────────────────────────────────
+var observer=new IntersectionObserver(function(entries){
+  entries.forEach(function(entry){
+    if(entry.isIntersecting){
+      entry.target.style.opacity='1';
+      entry.target.style.transform='translateY(0)';
+    }
+  });
+},{threshold:0.06});
+
+document.querySelectorAll('section').forEach(function(s){
+  s.style.opacity='0';
+  s.style.transform='translateY(24px)';
+  s.style.transition='opacity .5s ease, transform .5s ease';
+  observer.observe(s);
+});
+</script>
+</body>
+</html>

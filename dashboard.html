@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Graphite & Co.</title>
+<link rel="icon" href="pradeep.png">
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="pradeep.png" alt="logo" onerror="this.style.display='none'">
+      <span>Graphite & Co.<span class="role-badge" id="roleBadge">…</span></span>
+    </a>
+    <div class="nav-links">
+      <span class="small" id="userName"></span>
+      <a href="index.html" class="btn btn-ghost btn-sm">← Site</a>
+      <button class="btn btn-accent btn-sm" id="logoutBtn">Log out</button>
+    </div>
+  </div>
+</nav>
+
+<section>
+  <div class="wrap">
+    <div id="gate" class="panel center" style="max-width:480px;margin:60px auto;">
+      <div class="pencil-animation">✏️</div>
+      <h3 style="margin-top:16px;">Loading your dashboard…</h3>
+      <p class="small">Stuck? <a href="login.html">Log in again</a></p>
+    </div>
+    <div id="app" class="hidden">
+      <div class="tabs" id="tabs"></div>
+      <div id="tabContent"></div>
+    </div>
+  </div>
+</section>
+
+<div id="modalRoot"></div>
+
+<!-- Toast container -->
+<div id="toastBox" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════
+// HELPERS — defined first to avoid reference errors
+// ══════════════════════════════════════════════════════════
+function g(id) { return document.getElementById(id); }
+function show(id) { const e=g(id); if(e) e.classList.remove('hidden'); }
+function hide(id) { const e=g(id); if(e) e.classList.add('hidden'); }
+
+function showMsg(id, type, text) {
+  const el=g(id); if(!el) return;
+  el.className=`msg show ${type}`; el.textContent=text;
+  if(type==='ok') setTimeout(()=>{ if(el) el.className='msg'; },4000);
+}
+
+function toast(text, type='ok') {
+  const t=document.createElement('div');
+  t.style.cssText=`padding:10px 22px;border-radius:4px;font-size:13px;font-weight:600;
+    pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.15);border:1.5px solid;
+    animation:modal-in .25s ease;max-width:90vw;text-align:center;
+    ${type==='ok'?'background:#f0f8f0;color:#2A5A2A;border-color:#2A5A2A;'
+     :type==='err'?'background:#f8f0f0;color:#7A2020;border-color:#7A2020;'
+     :'background:#fff;color:#333;border-color:#999;'}`;
+  t.textContent=text;
+  g('toastBox').appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(),300); },3000);
+}
+
+function gateMsg(msg) {
+  g('gate').innerHTML=`<h3>⚠️</h3><p class="small">${msg}</p>
+    <a href="login.html" class="btn btn-accent btn-sm" style="margin-top:16px;">Back to login</a>`;
+  show('gate'); hide('app');
+}
+
+function L() {
+  return `<div style="display:flex;align-items:center;gap:8px;padding:24px 0;color:var(--ink-soft);font-size:13px;">
+    <span class="spinner"></span> Loading…</div>`;
+}
+
+function modal(html, cb) {
+  g('modalRoot').innerHTML=`<div class="modal-bg" id="mbg"><div class="modal">${html}</div></div>`;
+  g('mbg').onclick=e=>{ if(e.target.id==='mbg') closeModal(); };
+  // ESC key
+  const esc=e=>{ if(e.key==='Escape'){closeModal();document.removeEventListener('keydown',esc);} };
+  document.addEventListener('keydown',esc);
+  if(cb) cb();
+}
+function closeModal(){ g('modalRoot').innerHTML=''; }
+
+function mkBtn(label, cls, onclick) {
+  const b=document.createElement('button');
+  b.className=`btn btn-sm ${cls}`; b.textContent=label; b.onclick=onclick;
+  return b;
+}
+
+function timeAgo(ts) {
+  if(!ts) return '';
+  const d=ts.toDate ? ts.toDate() : new Date(ts);
+  const s=Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60) return 'just now';
+  if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago';
+  if(s<604800) return Math.floor(s/86400)+'d ago';
+  return d.toLocaleDateString();
+}
+
+function sortDocs(docs) {
+  return docs.sort((a,b)=>
+    (b.data().createdAt?.toMillis?.()||0)-(a.data().createdAt?.toMillis?.()||0)
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════
+let ME=null, ROLE=null, PROFILE={}, PRICING=DEFAULT_PRICING;
+let activeListeners=[];
+
+const SL={
+  pending:'Awaiting Confirmation', confirmed:'Confirmed — In Progress',
+  qr_sent:'Payment QR Sent', paid_screenshot:'Payment Submitted',
+  completed:'Completed 🎉', cancelled:'Cancelled'
+};
+
+function clearL(){ activeListeners.forEach(f=>f()); activeListeners=[]; }
+
+// ══════════════════════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════════════════════
+auth.onAuthStateChanged(async user=>{
+  if(!user){location.href='login.html';return;}
+  ME=user;
+  try{
+    const doc=await db.collection('users').doc(user.uid).get();
+    if(!doc.exists){gateMsg('No profile found. Contact admin or <a href="index.html#book">book a portrait</a> to create one.');return;}
+    PROFILE=doc.data();
+    ROLE=PROFILE.role||'customer';
+    PRICING=await getPricing();
+    g('userName').textContent=PROFILE.name||user.email;
+    g('roleBadge').textContent=ROLE;
+    hide('gate');show('app');
+    ({admin:renderAdmin,artist:renderArtist,customer:renderCustomer}[ROLE]||renderCustomer)();
+  }catch(e){gateMsg('Error: '+e.message);}
+});
+
+g('logoutBtn').onclick=()=>{clearL();auth.signOut().then(()=>location.href='index.html');};
+
+// ══════════════════════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════════════════════
+function setTabs(defs){
+  clearL();
+  const t=g('tabs');
+  t.innerHTML=defs.map((d,i)=>
+    `<div class="tab${i===0?' active':''}" data-i="${i}">${d.label}</div>`
+  ).join('');
+  t.querySelectorAll('.tab').forEach(el=>{
+    el.onclick=()=>{
+      clearL();
+      t.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      el.classList.add('active');
+      g('tabContent').innerHTML=L();
+      defs[+el.dataset.i].render();
+    };
+  });
+  g('tabContent').innerHTML=L();
+  defs[0].render();
+}
+
+// ══════════════════════════════════════════════════════════
+// STATUS TRACKER
+// ══════════════════════════════════════════════════════════
+function statusTracker(status){
+  const steps=[
+    {key:'pending',icon:'📝',label:'Order Placed',desc:'Waiting for artist to review.'},
+    {key:'confirmed',icon:'✅',label:'Confirmed',desc:'Artist confirmed & working.'},
+    {key:'qr_sent',icon:'💳',label:'Payment Requested',desc:'Scan QR below to pay.'},
+    {key:'paid_screenshot',icon:'📸',label:'Payment Submitted',desc:'Verifying payment.'},
+    {key:'completed',icon:'🎉',label:'Completed',desc:'Portrait is on its way!'}
+  ];
+  const ord=['pending','confirmed','qr_sent','paid_screenshot','completed'];
+  const ci=ord.indexOf(status);
+  if(status==='cancelled') return `<div class="msg show err" style="margin:16px 0;">✖ This order was cancelled.</div>`;
+  return `<div class="status-tracker" style="margin:16px 0;">
+    ${steps.map((s,i)=>{
+      const done=i<ci,cur=i===ci;
+      return `<div class="status-step">
+        <div class="step-dot ${done?'done':cur?'current':''}">${done?'✓':s.icon}</div>
+        <div class="step-info">
+          <div class="step-label" style="opacity:${cur?1:done?.6:.3};">${s.label}</div>
+          ${cur?`<div class="step-desc">${s.desc}</div>`:''}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  CUSTOMER
+// ══════════════════════════════════════════════════════════
+function renderCustomer(){
+  setTabs([
+    {label:'✏️ My Orders',render:renderCustomerOrders},
+    {label:'👤 Profile',render:renderProfile}
+  ]);
+}
+
+function renderCustomerOrders(){
+  const el=g('tabContent');
+  el.innerHTML=L();
+  const unsub=db.collection('orders')
+    .where('customerId','==',ME.uid)
+    .onSnapshot(snap=>{
+      if(snap.empty){
+        el.innerHTML=`<div class="panel center" style="max-width:420px;margin:40px auto;">
+          <div style="font-size:52px;">✏️</div>
+          <h3>No orders yet</h3>
+          <p class="small">Book your first custom portrait.</p>
+          <a href="index.html#book" class="btn btn-accent" style="margin-top:16px;">Book a portrait →</a>
+        </div>`;return;
+      }
+      el.innerHTML='<div id="cOL"></div>';
+      sortDocs(snap.docs).forEach(doc=>{
+        const o=doc.data(),id=doc.id;
+        const d=document.createElement('div');
+        d.className='list-item';d.style.marginBottom='24px';
+        d.innerHTML=customerCard(o,id);
+        g('cOL').appendChild(d);
+        attachCustActions(o,id);
+      });
+    },err=>{
+      el.innerHTML=`<div class="msg show err">Error: ${err.message}</div>`;
+    });
+  activeListeners.push(unsub);
+}
+
+function customerCard(o,id){
+  return `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+      <img src="${o.referenceImageUrl}" alt="ref" onerror="this.src='pradeep.png'"
+        style="width:80px;height:80px;object-fit:cover;border:2px solid var(--line);
+               border-radius:4px;flex-shrink:0;box-shadow:var(--sketch-shadow);">
+      <div style="flex:1;min-width:180px;">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;">
+          <strong style="font-family:'Fraunces',serif;">${o.size} · ${o.tier} · ${o.faces} face${o.faces>1?'s':''}</strong>
+          <span class="badge ${o.status}">${SL[o.status]||o.status}</span>
+        </div>
+        <div class="tiny">₹${o.qrAmount||o.amount} · Artist: ${o.artistName||'—'} · ${timeAgo(o.createdAt)}</div>
+        <div class="tiny">📞 ${o.customerPhone||'—'} &nbsp; 📦 ${o.address||'—'}</div>
+        ${o.notes?`<div class="tiny" style="font-style:italic;">💬 "${o.notes}"</div>`:''}
+      </div>
+    </div>
+    ${statusTracker(o.status)}
+    <div id="ca-${id}"></div>`;
+}
+
+function attachCustActions(o,id){
+  const box=g(`ca-${id}`);if(!box) return;
+  box.innerHTML='';
+
+  if(o.status==='pending'||o.status==='confirmed'){
+    box.innerHTML=`<div class="waiting-card">
+      <div class="pencil-animation" style="font-size:36px;">✏️</div>
+      <h4 style="margin:12px 0 6px;">${o.status==='pending'?'⏳ Waiting for confirmation…':'🎨 Artist is working!'}</h4>
+      <p class="small" style="margin:0 0 16px;">
+        ${o.status==='pending'
+          ?'Your order is under review. Call or message us to speed it up.'
+          :'Confirmed! Payment QR will appear here soon.'}
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
+        <a href="tel:${SITE.callNumber}" class="btn btn-accent btn-sm">📞 Call to confirm</a>
+        <a href="${waLink(SITE.whatsapp,'Hi! Order ID: '+id+' ('+o.size+', '+o.tier+'). Please confirm.')}" target="_blank" class="btn btn-outline btn-sm">💬 WhatsApp</a>
+      </div>
+    </div>`;return;
+  }
+
+  if(o.status==='qr_sent'){
+    box.innerHTML=`<div id="qrBox-${id}">${L()}</div>`;
+    buildQR(o,id);return;
+  }
+
+  if(o.status==='paid_screenshot'){
+    box.innerHTML=`<div class="msg show info" style="margin-top:12px;">
+      📸 <strong>Screenshot submitted!</strong> Verifying payment — usually within hours.
+      <div style="margin-top:10px;">
+        <a href="${waLink(SITE.whatsapp,'Hi! Payment screenshot submitted for order '+id+'. Please confirm.')}" target="_blank" class="btn btn-outline btn-sm">💬 Follow up</a>
+        <a href="tel:${SITE.callNumber}" class="btn btn-ghost btn-sm" style="margin-left:6px;">📞 Call</a>
+      </div>
+    </div>`;return;
+  }
+
+  if(o.status==='completed'){
+    box.innerHTML=`<div class="msg show ok" style="margin-top:12px;">
+      🎉 <strong>Portrait complete & shipping!</strong><br><small>To: ${o.address||'—'}</small>
+    </div>`;return;
+  }
+
+  if(o.status==='cancelled'){
+    box.innerHTML=`<div class="msg show err" style="margin-top:12px;">
+      ✖ Cancelled. <a href="index.html#book" style="color:inherit;text-decoration:underline;">Book again →</a>
+    </div>`;
+  }
+}
+
+async function buildQR(o,id){
+  const box=g(`qrBox-${id}`);if(!box) return;
+  try{
+    const adoc=await db.collection('users').doc(o.artistId).get();
+    const ad=adoc.exists?adoc.data():{};
+    const upi=ad.upiId||null;
+    const amt=o.qrAmount||o.amount;
+    const aName=ad.name||'Graphite & Co.';
+
+    box.innerHTML=`<div class="qr-panel" style="margin-top:16px;">
+      <div class="qr-label">💳 Payment Request</div>
+      ${upi?`
+        <div id="qrI-${id}" style="display:flex;justify-content:center;margin:20px 0 12px;
+          background:white;padding:16px;border-radius:4px;border:1px solid var(--line);"></div>
+        <div class="qr-amount">₹${amt}</div>
+        <div class="qr-label">Pay via any UPI app</div>
+        <div class="tiny" style="margin:4px 0 16px;">To: <strong>${aName}</strong> · UPI: <span class="mono">${upi}</span></div>
+      `:`
+        <div class="msg show info" style="margin:16px 0;">UPI not set — contact us to pay.</div>
+        <div class="qr-amount">₹${amt}</div>
+      `}
+      <div style="background:var(--bg-texture);border:1.5px solid var(--line);border-radius:4px;padding:16px;margin:16px 0;text-align:left;">
+        <div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📋 How to pay:</div>
+        <ol style="margin:0;padding-left:18px;font-size:13px;color:var(--ink-soft);line-height:2;">
+          <li>Open GPay / PhonePe / Paytm / BHIM</li>
+          <li>Scan QR or pay to: <strong class="mono">${upi||'—'}</strong></li>
+          <li>Amount: <strong>₹${amt}</strong></li>
+          <li>Take a screenshot after payment</li>
+          <li>Upload below ↓</li>
+        </ol>
+      </div>
+      <label>Upload payment screenshot *</label>
+      <input type="file" id="ssF-${id}" accept="image/*" style="margin-bottom:10px;">
+      <div id="ssP-${id}" style="display:none;margin-bottom:10px;text-align:center;">
+        <img id="ssPImg-${id}" style="max-height:120px;border-radius:4px;border:1px solid var(--line);">
+      </div>
+      <div id="ssM-${id}" class="msg"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button class="btn btn-accent btn-block" id="ssB-${id}">📸 Submit screenshot</button>
+        <a href="${waLink(SITE.whatsapp,'Hi! Paid ₹'+amt+' for order '+id+' ('+o.size+','+o.tier+'). Sharing screenshot.')}" target="_blank" class="btn btn-outline btn-block">💬 Share on WhatsApp</a>
+        <a href="tel:${SITE.callNumber}" class="btn btn-ghost btn-sm" style="text-align:center;">📞 Need help? Call</a>
+      </div>
+    </div>`;
+
+    if(upi) renderUpiQr(g(`qrI-${id}`),{upiId:upi,payeeName:aName,amount:amt,note:'Portrait order'});
+
+    // Preview selected screenshot
+    g(`ssF-${id}`).onchange=e=>{
+      const f=e.target.files[0]; if(!f) return;
+      const r=new FileReader();
+      r.onload=ev=>{
+        g(`ssPImg-${id}`).src=ev.target.result;
+        g(`ssP-${id}`).style.display='block';
+      };
+      r.readAsDataURL(f);
+    };
+
+    g(`ssB-${id}`).onclick=async()=>{
+      const f=g(`ssF-${id}`).files[0];
+      if(!f){showMsg(`ssM-${id}`,'err','Choose a screenshot file.');return;}
+      const sb=g(`ssB-${id}`);
+      sb.disabled=true;sb.innerHTML='<span class="spinner"></span> Uploading…';
+      try{
+        const url=await uploadToCloudinary(f,'payments');
+        await db.collection('orders').doc(id).update({
+          screenshotUrl:url,status:'paid_screenshot',
+          updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+        });
+        toast('Screenshot submitted successfully!','ok');
+      }catch(e){
+        showMsg(`ssM-${id}`,'err',e.message||'Upload failed.');
+        sb.disabled=false;sb.textContent='📸 Submit screenshot';
+      }
+    };
+  }catch(e){
+    box.innerHTML=`<div class="msg show err">Payment load error: ${e.message}</div>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  ARTIST
+// ══════════════════════════════════════════════════════════
+function renderArtist(){
+  setTabs([
+    {label:'📋 My Orders',render:()=>renderOrderMgr(ME.uid)},
+    {label:'🖼 My Portraits',render:()=>renderPortraitMgr(ME.uid,PROFILE.name)},
+    {label:'👤 Profile',render:renderProfile}
+  ]);
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN
+// ══════════════════════════════════════════════════════════
+function renderAdmin(){
+  setTabs([
+    {label:'📊 Overview',render:renderOverview},
+    {label:'📋 Orders',render:()=>renderOrderMgr(null)},
+    {label:'🖼 Portraits',render:()=>renderPortraitMgr(null,null)},
+    {label:'👥 Artists',render:renderArtists},
+    {label:'👤 Customers',render:renderCustomers},
+    {label:'💰 Pricing',render:renderPricing},
+    {label:'⚙️ Settings',render:renderSettings}
+  ]);
+}
+
+async function renderOverview(){
+  const el=g('tabContent');el.innerHTML=L();
+  try{
+    const [oS,cS,aS,pS]=await Promise.all([
+      db.collection('orders').get(),
+      db.collection('users').where('role','==','customer').get(),
+      db.collection('users').where('role','==','artist').get(),
+      db.collection('portraits').get()
+    ]);
+    const os=oS.docs.map(d=>d.data());
+    const rev=os.filter(o=>o.status==='completed').reduce((s,o)=>s+(o.qrAmount||o.amount||0),0);
+    const pend=os.filter(o=>o.status==='pending').length;
+    const prog=os.filter(o=>['confirmed','qr_sent','paid_screenshot'].includes(o.status)).length;
+
+    el.innerHTML=`
+      <div class="admin-stat-grid">
+        ${[
+          ['📦',oS.size,'Total Orders'],['⏳',pend,'Pending'],['🔄',prog,'In Progress'],
+          ['✅',os.filter(o=>o.status==='completed').length,'Completed'],
+          ['💰','₹'+rev,'Revenue'],['👤',cS.size,'Customers'],
+          ['🎨',aS.size,'Artists'],['🖼',pS.size,'Portraits']
+        ].map(([i,n,l])=>`<div class="admin-stat"><span style="font-size:24px;">${i}</span><span class="stat-num">${n}</span><span class="stat-label">${l}</span></div>`).join('')}
+      </div>
+
+      <div class="grid-2" style="gap:20px;">
+        <div class="panel">
+          <h3>Recent Orders</h3>
+          ${os.length===0?'<p class="small empty-note">No orders.</p>':
+            os.slice(0,8).map(o=>`
+            <div class="spread" style="padding:8px 0;border-bottom:1px solid var(--line-soft);">
+              <div>
+                <strong style="font-size:13px;">${o.customerName||'—'}</strong>
+                <span class="tiny" style="margin-left:6px;">${o.size||''} · ${o.tier||''}</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <span class="mono tiny">₹${o.amount||0}</span>
+                <span class="badge ${o.status}" style="font-size:10px;">${SL[o.status]||o.status}</span>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="panel">
+          <h3>Quick Actions</h3>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;">
+            <a href="index.html" class="btn btn-outline btn-sm">🌐 View live site</a>
+            <button class="btn btn-outline btn-sm" onclick="document.querySelector('[data-i=\\'2\\']').click()">🖼 Manage portraits</button>
+            <button class="btn btn-outline btn-sm" onclick="document.querySelector('[data-i=\\'3\\']').click()">👥 Manage artists</button>
+            <button class="btn btn-outline btn-sm" onclick="document.querySelector('[data-i=\\'5\\']').click()">💰 Update pricing</button>
+          </div>
+        </div>
+      </div>`;
+  }catch(e){el.innerHTML=`<div class="msg show err">Error: ${e.message}</div>`;}
+}
+
+// ══════════════════════════════════════════════════════════
+//  ORDER MANAGER — Admin + Artist
+// ══════════════════════════════════════════════════════════
+function renderOrderMgr(artistId){
+  const el=g('tabContent');el.innerHTML=L();
+  let q=db.collection('orders');
+  if(artistId) q=q.where('artistId','==',artistId);
+
+  const unsub=q.onSnapshot(snap=>{
+    if(snap.empty){el.innerHTML='<p class="small empty-note">No orders yet.</p>';return;}
+
+    // Filter tabs
+    const docs=sortDocs(snap.docs);
+    const allData=docs.map(d=>({id:d.id,...d.data()}));
+    const statuses=['all','pending','confirmed','qr_sent','paid_screenshot','completed','cancelled'];
+
+    el.innerHTML=`
+      <div class="pills" id="orderFilters" style="margin-bottom:20px;"></div>
+      <div id="omList"></div>`;
+
+    const fBox=g('orderFilters');
+    statuses.forEach((s,i)=>{
+      const count=s==='all'?allData.length:allData.filter(o=>o.status===s).length;
+      if(s!=='all'&&count===0) return;
+      const p=document.createElement('button');
+      p.className='pill'+(i===0?' active':'');
+      p.textContent=`${s==='all'?'All':SL[s]||s} (${count})`;
+      p.onclick=()=>{
+        fBox.querySelectorAll('.pill').forEach(x=>x.classList.remove('active'));
+        p.classList.add('active');
+        renderOMList(s==='all'?allData:allData.filter(o=>o.status===s),artistId);
+      };
+      fBox.appendChild(p);
+    });
+
+    renderOMList(allData,artistId);
+  },err=>{el.innerHTML=`<div class="msg show err">Error: ${err.message}</div>`;});
+
+  activeListeners.push(unsub);
+}
+
+function renderOMList(items,artistId){
+  const list=g('omList'); if(!list) return;
+  list.innerHTML='';
+  if(!items.length){list.innerHTML='<p class="small empty-note">No orders matching filter.</p>';return;}
+
+  items.forEach(o=>{
+    const id=o.id;
+    const d=document.createElement('div');
+    d.className='list-item';d.style.marginBottom='14px';
+    d.innerHTML=`
+      <div class="order-row">
+        <img class="thumb" src="${o.referenceImageUrl}" alt="ref" onerror="this.src='pradeep.png'"
+             style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1.5px solid var(--line);">
+        <div style="min-width:0;flex:1;">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;">
+            <strong>${o.customerName||'—'}</strong>
+            <span class="badge ${o.status}" style="font-size:10px;">${SL[o.status]||o.status}</span>
+            <span class="tiny">${timeAgo(o.createdAt)}</span>
+          </div>
+          <div class="tiny">${o.size||'—'} · ${o.tier||'—'} · ${o.faces||1} face${(o.faces||1)>1?'s':''} · <span class="mono">₹${o.amount||0}</span>${!artistId?' · '+o.artistName:''}</div>
+          <div class="tiny">📞 ${o.customerPhone||'—'} · ${o.customerEmail||'—'}</div>
+          <div class="tiny">📦 ${o.address||'—'}</div>
+          ${o.notes?`<div class="tiny" style="font-style:italic;">💬 "${o.notes}"</div>`:''}
+          ${o.screenshotUrl?`<a href="${o.screenshotUrl}" target="_blank" style="font-size:11px;color:var(--ink);text-decoration:underline;">📸 Payment proof ↗</a>`:''}
+        </div>
+        <div id="oa-${id}" style="display:flex;flex-direction:column;gap:6px;min-width:145px;"></div>
+      </div>`;
+    list.appendChild(d);
+    renderOA(o,id);
+  });
+}
+
+function renderOA(o,id){
+  const box=g(`oa-${id}`);if(!box) return;
+  box.innerHTML='';
+  const upd=async(data,successMsg)=>{
+    box.innerHTML='<span class="spinner"></span>';
+    try{
+      await db.collection('orders').doc(id).update({...data,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      if(successMsg) toast(successMsg);
+    }catch(e){toast('Error: '+e.message,'err');}
+  };
+
+  if(o.status==='pending'){
+    box.appendChild(mkBtn('✅ Confirm','btn-accent',()=>upd({status:'confirmed'},'Order confirmed!')));
+  }
+  if(['pending','confirmed'].includes(o.status)){
+    box.appendChild(mkBtn('💳 Send QR','btn-outline',()=>openQRModal(o,id)));
+  }
+  if(o.status==='paid_screenshot'){
+    box.appendChild(mkBtn('✅ Confirm pay','btn-accent',()=>upd({status:'confirmed'},'Payment confirmed!')));
+    if(o.screenshotUrl){
+      const a=document.createElement('a');
+      a.href=o.screenshotUrl;a.target='_blank';a.className='btn btn-ghost btn-sm';a.textContent='🖼 Proof';
+      box.appendChild(a);
+    }
+  }
+  if(['confirmed','qr_sent'].includes(o.status)){
+    box.appendChild(mkBtn('🏁 Complete','btn-paper',()=>upd({status:'completed'},'Order completed!')));
+  }
+  // Individual delete + cancel
+  if(!['completed'].includes(o.status)){
+    box.appendChild(mkBtn('✖ Cancel','btn-ghost btn-xs',()=>{
+      if(confirm('Cancel this order?'))upd({status:'cancelled'},'Order cancelled.');
+    }));
+  }
+  if(ROLE==='admin'){
+    box.appendChild(mkBtn('🗑 Delete','btn-danger btn-xs',async()=>{
+      if(!confirm('Permanently delete this order?'))return;
+      try{
+        await db.collection('orders').doc(id).delete();
+        toast('Order deleted.');
+      }catch(e){toast('Delete failed: '+e.message,'err');}
+    }));
+  }
+  // Contact customer
+  const cDiv=document.createElement('div');
+  cDiv.style.cssText='display:flex;gap:4px;margin-top:4px;';
+  if(o.customerPhone){
+    const call=document.createElement('a');
+    call.href='tel:'+o.customerPhone;call.className='btn btn-ghost btn-xs';call.textContent='📞';
+    cDiv.appendChild(call);
+  }
+  const wa=document.createElement('a');
+  wa.href=waLink(o.customerPhone||SITE.whatsapp,'Hi '+o.customerName+', regarding your portrait order:');
+  wa.target='_blank';wa.className='btn btn-ghost btn-xs';wa.textContent='💬';
+  cDiv.appendChild(wa);
+  box.appendChild(cDiv);
+}
+
+function openQRModal(o,id){
+  modal(`
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <h3>💳 Send Payment QR</h3>
+    <p class="small">Set final amount for <strong>${o.customerName}</strong>. Customer sees UPI QR instantly.</p>
+    <label>Final amount (₹)</label>
+    <input type="number" id="qrAmt" value="${o.amount}" style="font-size:22px;font-weight:700;text-align:center;">
+    <div id="qrMM" class="msg"></div>
+    <button class="btn btn-accent btn-block" id="qrSB">📤 Send QR to customer</button>
+  `);
+  g('qrSB').onclick=async()=>{
+    const amt=Number(g('qrAmt').value);
+    if(!amt||amt<=0){showMsg('qrMM','err','Enter valid amount.');return;}
+    g('qrSB').disabled=true;g('qrSB').innerHTML='<span class="spinner"></span> Sending…';
+    try{
+      await db.collection('orders').doc(id).update({
+        qrAmount:amt,status:'qr_sent',updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('QR sent to customer!');closeModal();
+    }catch(e){
+      showMsg('qrMM','err',e.message);
+      g('qrSB').disabled=false;g('qrSB').textContent='📤 Send QR to customer';
+    }
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+//  PORTRAIT MANAGER
+// ══════════════════════════════════════════════════════════
+let _pmF=null;
+
+async function renderPortraitMgr(aidFixed,anameFixed){
+  const el=g('tabContent');el.innerHTML=L();
+  let artists=[];
+  if(!aidFixed){
+    try{
+      const s=await db.collection('users').where('role','==','artist').get();
+      s.forEach(d=>artists.push({id:d.id,name:d.data().name}));
+    }catch(e){}
+  }
+
+  el.innerHTML=`
+    <div class="grid-2" style="gap:24px;">
+      <div class="panel">
+        <h3>➕ Add Portrait</h3>
+        <div class="upload-box" id="pmBox" style="cursor:pointer;">
+          <span class="upload-icon">🖼</span>
+          <div id="pmP">Click to upload</div>
+          <img id="pmPv" class="preview hidden">
+        </div>
+        <input type="file" id="pmFi" accept="image/*" class="hidden">
+        ${!aidFixed?`<label>Artist</label><select id="pmA">${artists.length===0?'<option value="">No artists — add one first</option>':artists.map(a=>`<option value="${a.id}" data-name="${a.name}">${a.name}</option>`).join('')}</select>`:''}
+        <label>Title</label><input id="pmT" placeholder="e.g. Bridal portrait, A3">
+        <div class="field-row">
+          <div><label>Size</label><select id="pmS">${Object.keys(PRICING.base).map(s=>`<option>${s}</option>`).join('')}</select></div>
+          <div><label>Detail</label><select id="pmD"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+        </div>
+        <label>Tags <span style="font-weight:400;text-transform:none;">(comma separated)</span></label>
+        <input id="pmTg" placeholder="bridal, realistic, couple">
+        <label>Display price <span style="font-weight:400;text-transform:none;">(optional ₹)</span></label>
+        <input id="pmPr" type="number" placeholder="e.g. 1499">
+        <div id="pmM" class="msg"></div>
+        <button class="btn btn-accent btn-block" id="pmSub">Add to gallery</button>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h3 style="margin:0;">Gallery</h3>
+          <span class="tiny" id="pmCount"></span>
+        </div>
+        <div class="gallery" id="pmG"></div>
+      </div>
+    </div>`;
+
+  _pmF=null;
+  g('pmBox').onclick=()=>g('pmFi').click();
+  g('pmFi').onchange=e=>{
+    const f=e.target.files[0];if(!f) return;
+    _pmF=f;
+    const r=new FileReader();
+    r.onload=ev=>{g('pmP').classList.add('hidden');g('pmPv').src=ev.target.result;g('pmPv').classList.remove('hidden');};
+    r.readAsDataURL(f);
+  };
+
+  g('pmSub').onclick=async()=>{
+    if(!_pmF){showMsg('pmM','err','Choose image first.');return;}
+    let aid=aidFixed,aname=anameFixed;
+    if(!aid){const sel=g('pmA');if(!sel?.value){showMsg('pmM','err','Select artist.');return;}aid=sel.value;aname=sel.options[sel.selectedIndex].dataset.name;}
+    const sb=g('pmSub');sb.disabled=true;sb.innerHTML='<span class="spinner"></span> Uploading…';
+    try{
+      const url=await uploadToCloudinary(_pmF,'gallery');
+      const tags=g('pmTg').value.split(',').map(t=>t.trim()).filter(Boolean);
+      await db.collection('portraits').add({
+        artistId:aid,artistName:aname,imageUrl:url,
+        title:g('pmT').value.trim(),size:g('pmS').value,tier:g('pmD').value,
+        tags,price:Number(g('pmPr').value)||null,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('Portrait added!');
+      _pmF=null;g('pmPv').classList.add('hidden');g('pmP').classList.remove('hidden');
+      g('pmT').value=g('pmTg').value=g('pmPr').value='';
+      loadPG(aidFixed);
+    }catch(e){showMsg('pmM','err',e.message);}
+    sb.disabled=false;sb.textContent='Add to gallery';
+  };
+
+  loadPG(aidFixed);
+}
+
+async function loadPG(aidFixed){
+  const grid=g('pmG'),cnt=g('pmCount');
+  if(!grid) return;
+  grid.innerHTML=L();
+  try{
+    let q=db.collection('portraits');
+    if(aidFixed) q=q.where('artistId','==',aidFixed);
+    const snap=await q.get();
+    if(cnt) cnt.textContent=snap.size+' portraits';
+    if(snap.empty){grid.innerHTML='<p class="empty-note">No portraits yet.</p>';return;}
+
+    grid.innerHTML='';
+    sortDocs(snap.docs).forEach(doc=>{
+      const p=doc.data(),pid=doc.id;
+      const c=document.createElement('div');
+      c.className='card-portrait';
+      c.innerHTML=`
+        <div class="img-box"><img src="${p.imageUrl}" alt="${p.title||'Portrait'}" loading="lazy"></div>
+        <div class="meta">
+          <div class="title">${p.title||'Untitled'}</div>
+          <div class="tag">${p.size||'—'} · ${p.tier||'—'}${!aidFixed?' · '+(p.artistName||''):''}</div>
+          ${p.price?`<span class="price-tag">₹${p.price}</span>`:''}
+          ${p.tags?.length?`<div class="tag-list">${p.tags.map(t=>`<span class="tag-chip">${t}</span>`).join('')}</div>`:''}
+          <div class="portrait-actions">
+            <button class="btn btn-danger btn-xs dbtn">🗑</button>
+            ${ROLE==='admin'?`<button class="btn btn-ghost btn-xs ebtn">✏️</button>`:''}
+          </div>
+        </div>`;
+
+      c.querySelector('.dbtn').onclick=async()=>{
+        if(!confirm('Delete this portrait?'))return;
+        try{
+          await db.collection('portraits').doc(pid).delete();
+          await queueDel(extractPID(p.imageUrl));
+          toast('Portrait deleted.');loadPG(aidFixed);
+        }catch(e){toast('Error: '+e.message,'err');}
+      };
+
+      if(ROLE==='admin'){
+        c.querySelector('.ebtn')?.addEventListener('click',()=>editPortrait(doc,aidFixed));
+      }
+      grid.appendChild(c);
+    });
+  }catch(e){grid.innerHTML=`<div class="msg show err">${e.message}</div>`;}
+}
+
+function editPortrait(doc,aidFixed){
+  const p=doc.data(),pid=doc.id;
+  modal(`
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <h3>✏️ Edit Portrait</h3>
+    <label>Title</label><input id="epT" value="${p.title||''}">
+    <div class="field-row">
+      <div><label>Size</label><select id="epS">${Object.keys(PRICING.base).map(s=>`<option${s===p.size?' selected':''}>${s}</option>`).join('')}</select></div>
+      <div><label>Detail</label><select id="epD">${['low','medium','high'].map(t=>`<option value="${t}"${t===p.tier?' selected':''}>${t}</option>`).join('')}</select></div>
+    </div>
+    <label>Tags</label><input id="epTg" value="${(p.tags||[]).join(', ')}">
+    <label>Price</label><input id="epPr" type="number" value="${p.price||''}">
+    <div id="epM" class="msg"></div>
+    <button class="btn btn-accent btn-block" id="epSv">Save changes</button>
+  `);
+  g('epSv').onclick=async()=>{
+    g('epSv').disabled=true;g('epSv').innerHTML='<span class="spinner"></span> Saving…';
+    try{
+      await db.collection('portraits').doc(pid).update({
+        title:g('epT').value.trim(),size:g('epS').value,tier:g('epD').value,
+        tags:g('epTg').value.split(',').map(t=>t.trim()).filter(Boolean),
+        price:Number(g('epPr').value)||null
+      });
+      toast('Portrait updated!');closeModal();loadPG(aidFixed);
+    }catch(e){showMsg('epM','err',e.message);g('epSv').disabled=false;g('epSv').textContent='Save changes';}
+  };
+}
+
+function extractPID(url){
+  try{const p=url.split('/upload/')[1];return p.replace(/^v\d+\//,'').replace(/\.[^/.]+$/,'');}catch{return null;}
+}
+async function queueDel(pid){
+  if(!pid) return;
+  try{await db.collection('_deleteQueue').add({publicId:pid,requestedBy:ME.uid,requestedAt:firebase.firestore.FieldValue.serverTimestamp()});}
+  catch(e){console.warn('Queue:',e);}
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN — Artists
+// ══════════════════════════════════════════════════════════
+async function renderArtists(){
+  const el=g('tabContent');
+  el.innerHTML=`
+    <div class="panel" style="max-width:540px;margin-bottom:24px;">
+      <h3>➕ Add Artist</h3>
+      <div class="field-row"><div><label>Name</label><input id="naN"></div><div><label>Phone</label><input id="naP"></div></div>
+      <div class="field-row"><div><label>Email</label><input id="naE" type="email"></div><div><label>Password</label><input id="naPw" type="password" placeholder="Min 6 chars"></div></div>
+      <label>UPI ID</label><input id="naU" placeholder="artist@upi">
+      <label>Bio</label><textarea id="naB" placeholder="Short bio…" style="min-height:55px;"></textarea>
+      <div id="naMsg" class="msg"></div>
+      <button class="btn btn-accent" id="naBtn">Create artist</button>
+    </div>
+    <div id="aList">${L()}</div>`;
+
+  g('naBtn').onclick=async()=>{
+    const n=g('naN').value.trim(),p=g('naP').value.trim(),e=g('naE').value.trim(),
+          pw=g('naPw').value,u=g('naU').value.trim(),b=g('naB').value.trim();
+    if(!n||!e||pw.length<6){showMsg('naMsg','err','Fill name, email & 6+ char password.');return;}
+    const nb=g('naBtn');nb.disabled=true;nb.innerHTML='<span class="spinner"></span> Creating…';
+    try{
+      const sec=firebase.initializeApp(firebaseConfig,'sec-'+Date.now());
+      const cred=await sec.auth().createUserWithEmailAndPassword(e,pw);
+      await sec.auth().signOut();await sec.delete();
+      await db.collection('users').doc(cred.user.uid).set({
+        name:n,phone:p,email:e,upiId:u,bio:b,role:'artist',
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('Artist created!');
+      ['naN','naP','naE','naPw','naU','naB'].forEach(i=>g(i).value='');
+      loadAList();
+    }catch(er){showMsg('naMsg','err',er.message);}
+    nb.disabled=false;nb.textContent='Create artist';
+  };
+  loadAList();
+}
+
+async function loadAList(){
+  const box=g('aList');
+  try{
+    const snap=await db.collection('users').where('role','==','artist').get();
+    if(snap.empty){box.innerHTML='<p class="small empty-note">No artists yet.</p>';return;}
+    box.innerHTML=`<h3 style="margin-bottom:12px;">Artists (${snap.size})</h3>`;
+    snap.forEach(doc=>{
+      const d=doc.data();
+      const r=document.createElement('div');
+      r.className='list-item';r.style.marginBottom='10px';
+      r.innerHTML=`
+        <div class="spread">
+          <div>
+            <strong>${d.name||'—'}</strong>
+            <div class="tiny">${d.email||''} · ${d.phone||'—'} · UPI: ${d.upiId||'not set'}</div>
+            ${d.bio?`<div class="tiny" style="font-style:italic;">"${d.bio}"</div>`:''}
+          </div>
+          <div style="display:flex;gap:6px;">
+            <a href="tel:${d.phone||''}" class="btn btn-ghost btn-xs">📞</a>
+            <button class="btn btn-ghost btn-xs" data-edit="${doc.id}">✏️</button>
+            <button class="btn btn-danger btn-xs" data-del="${doc.id}">🗑</button>
+          </div>
+        </div>`;
+
+      r.querySelector('[data-del]').onclick=async()=>{
+        if(!confirm(`Remove ${d.name}?`))return;
+        try{await db.collection('users').doc(doc.id).delete();toast('Artist removed.');loadAList();}
+        catch(e){toast('Error: '+e.message,'err');}
+      };
+
+      r.querySelector('[data-edit]').onclick=()=>{
+        modal(`
+          <button class="modal-close" onclick="closeModal()">×</button>
+          <h3>✏️ Edit Artist: ${d.name}</h3>
+          <label>Name</label><input id="eaN" value="${d.name||''}">
+          <label>Phone</label><input id="eaP" value="${d.phone||''}">
+          <label>UPI ID</label><input id="eaU" value="${d.upiId||''}">
+          <label>Bio</label><textarea id="eaB">${d.bio||''}</textarea>
+          <div id="eaM" class="msg"></div>
+          <button class="btn btn-accent btn-block" id="eaSv">Save</button>
+        `);
+        g('eaSv').onclick=async()=>{
+          try{
+            await db.collection('users').doc(doc.id).update({
+              name:g('eaN').value.trim(),phone:g('eaP').value.trim(),
+              upiId:g('eaU').value.trim(),bio:g('eaB').value.trim()
+            });
+            toast('Artist updated!');closeModal();loadAList();
+          }catch(e){showMsg('eaM','err',e.message);}
+        };
+      };
+
+      box.appendChild(r);
+    });
+  }catch(e){box.innerHTML=`<div class="msg show err">${e.message}</div>`;}
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN — Customers
+// ══════════════════════════════════════════════════════════
+async function renderCustomers(){
+  const el=g('tabContent');el.innerHTML=L();
+  try{
+    const snap=await db.collection('users').where('role','==','customer').get();
+    if(snap.empty){el.innerHTML='<p class="small empty-note">No customers yet.</p>';return;}
+    el.innerHTML=`<h3 style="margin-bottom:14px;">Customers (${snap.size})</h3>`;
+    snap.forEach(doc=>{
+      const d=doc.data();
+      const r=document.createElement('div');
+      r.className='list-item spread';r.style.marginBottom='10px';
+      r.innerHTML=`
+        <div>
+          <strong>${d.name||'—'}</strong>
+          <div class="tiny">${d.email||''} · ${d.phone||''}</div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <a href="tel:${d.phone||''}" class="btn btn-ghost btn-xs">📞</a>
+          <a href="${waLink(d.phone||SITE.whatsapp,'Hi '+d.name+', about your portrait:')}" target="_blank" class="btn btn-ghost btn-xs">💬</a>
+          ${ROLE==='admin'?`<button class="btn btn-danger btn-xs" data-del="${doc.id}">🗑</button>`:''}
+        </div>`;
+      if(ROLE==='admin'){
+        r.querySelector('[data-del]')?.addEventListener('click',async()=>{
+          if(!confirm(`Delete customer ${d.name}?`))return;
+          try{await db.collection('users').doc(doc.id).delete();toast('Customer removed.');renderCustomers();}
+          catch(e){toast('Error: '+e.message,'err');}
+        });
+      }
+      el.appendChild(r);
+    });
+  }catch(e){el.innerHTML=`<div class="msg show err">${e.message}</div>`;}
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN — Pricing
+// ══════════════════════════════════════════════════════════
+function renderPricing(){
+  const el=g('tabContent');
+  el.innerHTML=`
+    <div class="panel" style="max-width:580px;">
+      <h3>💰 Pricing Matrix</h3>
+      <p class="small" style="margin-bottom:16px;">Base prices per size/detail. Extra faces add % on top.</p>
+      ${Object.keys(PRICING.base).map(sz=>`
+        <div style="border:1.5px solid var(--line);border-radius:4px;padding:16px;margin-bottom:14px;">
+          <h4 style="margin-bottom:10px;">${sz}</h4>
+          <div class="field-row">
+            ${['low','medium','high'].map(t=>`<div><label style="text-transform:capitalize;">${t}</label>
+              <input class="pIn" data-size="${sz}" data-tier="${t}" type="number" value="${PRICING.base[sz][t]||0}"></div>`).join('')}
+          </div>
+        </div>`).join('')}
+      <label>Extra face % per additional face</label>
+      <input id="efP" type="number" value="${PRICING.extraFace||60}">
+      <div id="prM" class="msg"></div>
+      <button class="btn btn-accent" id="prSv">Save pricing</button>
+    </div>`;
+
+  g('prSv').onclick=async()=>{
+    const nb=JSON.parse(JSON.stringify(PRICING.base));
+    document.querySelectorAll('.pIn').forEach(i=>{nb[i.dataset.size][i.dataset.tier]=Number(i.value);});
+    const np={base:nb,extraFace:Number(g('efP').value),faceOptions:PRICING.faceOptions||[1,2,3]};
+    try{
+      await db.collection('settings').doc('pricing').set(np);
+      PRICING=np;toast('Pricing updated!');
+    }catch(e){showMsg('prM','err',e.message);}
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+//  ADMIN — Settings + Data Management
+// ══════════════════════════════════════════════════════════
+async function renderSettings(){
+  const el=g('tabContent');el.innerHTML=L();
+  let social={...SITE};
+  try{const d=await db.collection('settings').doc('social').get();if(d.exists) social={...SITE,...d.data()};}catch(e){}
+
+  el.innerHTML=`
+    <!-- Social -->
+    <div class="panel" style="max-width:520px;margin-bottom:24px;">
+      <h3>⚙️ Social & Contact</h3>
+      <label>Instagram</label><input id="sIg" value="${social.instagram||''}">
+      <label>WhatsApp (no +)</label><input id="sWa" value="${social.whatsapp||''}">
+      <label>Call number</label><input id="sCl" value="${social.callNumber||''}">
+      <label>YouTube</label><input id="sYt" value="${social.youtube||''}">
+      <div id="sM" class="msg"></div>
+      <button class="btn btn-accent" id="sSv">Save</button>
+    </div>
+
+    <!-- Data Management -->
+    <div class="panel" style="max-width:520px;margin-bottom:24px;border-color:#8B2020;border-width:2px;">
+      <h3>🗑 Data Management</h3>
+      <p class="small" style="margin-bottom:16px;"><strong>Danger zone</strong> — these actions are irreversible.</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <button class="btn btn-danger btn-sm" id="dOrders">🗑 All orders</button>
+        <button class="btn btn-danger btn-sm" id="dPortraits">🗑 All portraits</button>
+        <button class="btn btn-danger btn-sm" id="dCustomers">🗑 All customers</button>
+        <button class="btn btn-danger btn-sm" id="dArtists">🗑 All artists</button>
+      </div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-danger btn-block" id="dAll">⚠️ DELETE EVERYTHING</button>
+      </div>
+      <div id="dmM" class="msg" style="margin-top:12px;"></div>
+    </div>
+
+    <!-- Cloudinary queue -->
+    <div class="panel" style="max-width:520px;">
+      <h3>☁️ Cloudinary Queue</h3>
+      <p class="small" style="margin-bottom:12px;">
+        Flagged for deletion. Remove manually from
+        <a href="https://cloudinary.com/console/media_library" target="_blank" style="color:var(--ink);text-decoration:underline;">Cloudinary ↗</a>
+      </p>
+      <div id="dQ">${L()}</div>
+      <button class="btn btn-danger btn-sm" id="clearQ" style="margin-top:12px;">Clear entire queue</button>
+    </div>`;
+
+  g('sSv').onclick=async()=>{
+    try{
+      await db.collection('settings').doc('social').set({
+        instagram:g('sIg').value.trim(),whatsapp:g('sWa').value.trim(),
+        callNumber:g('sCl').value.trim(),youtube:g('sYt').value.trim()
+      });toast('Settings saved!');
+    }catch(e){showMsg('sM','err',e.message);}
+  };
+
+  // Data management helpers
+  const delCol=async(col)=>{
+    const snap=await db.collection(col).get();
+    if(snap.empty) return 0;
+    // Batch delete (max 500 per batch)
+    const batches=[];let batch=db.batch();let count=0;
+    snap.forEach(d=>{
+      batch.delete(d.ref);count++;
+      if(count%450===0){batches.push(batch.commit());batch=db.batch();}
+    });
+    batches.push(batch.commit());
+    await Promise.all(batches);
+    return snap.size;
+  };
+
+  const delByRole=async(role)=>{
+    const snap=await db.collection('users').where('role','==',role).get();
+    if(snap.empty) return 0;
+    const batch=db.batch();
+    snap.forEach(d=>batch.delete(d.ref));
+    await batch.commit();
+    return snap.size;
+  };
+
+  const confirmDel=async(what,fn)=>{
+    if(!confirm(`Delete ALL ${what}? Cannot be undone.`))return;
+    try{const n=await fn();toast(`Deleted ${n} ${what}.`);}
+    catch(e){showMsg('dmM','err',e.message);}
+  };
+
+  g('dOrders').onclick=()=>confirmDel('orders',()=>delCol('orders'));
+  g('dPortraits').onclick=()=>confirmDel('portraits',()=>delCol('portraits'));
+  g('dCustomers').onclick=()=>confirmDel('customers',()=>delByRole('customer'));
+  g('dArtists').onclick=()=>confirmDel('artists',()=>delByRole('artist'));
+
+  g('dAll').onclick=async()=>{
+    if(!confirm('⚠️ DELETE all orders, portraits, customers and artists?'))return;
+    if(!confirm('LAST CHANCE — this erases everything!'))return;
+    try{
+      const r=await Promise.all([
+        delCol('orders'),delCol('portraits'),
+        delByRole('customer'),delByRole('artist'),
+        delCol('_deleteQueue')
+      ]);
+      toast(`Deleted ${r.reduce((a,b)=>a+b,0)} total items.`);
+    }catch(e){showMsg('dmM','err',e.message);}
+  };
+
+  // Cloudinary queue
+  try{
+    const qs=await db.collection('_deleteQueue').get();
+    const qE=g('dQ');
+    if(qs.empty){qE.innerHTML='<p class="small">Queue empty ✓</p>';}
+    else{
+      qE.innerHTML=`<p class="small" style="margin-bottom:8px;">${qs.size} items pending:</p>`;
+      qs.forEach(doc=>{
+        const d=doc.data();
+        const r=document.createElement('div');
+        r.className='list-item spread';r.style.marginBottom='6px';
+        r.innerHTML=`<span class="tiny mono" style="word-break:break-all;">${d.publicId||'—'}</span>
+          <button class="btn btn-danger btn-xs">Clear</button>`;
+        r.querySelector('button').onclick=async()=>{
+          await db.collection('_deleteQueue').doc(doc.id).delete();
+          r.remove();toast('Cleared from queue.');
+        };
+        qE.appendChild(r);
+      });
+    }
+
+    g('clearQ').onclick=async()=>{
+      if(!confirm('Clear entire queue?'))return;
+      try{await delCol('_deleteQueue');toast('Queue cleared.');g('dQ').innerHTML='<p class="small">Queue empty ✓</p>';}
+      catch(e){toast('Error: '+e.message,'err');}
+    };
+  }catch(e){g('dQ').innerHTML=`<p class="small">${e.message}</p>`;}
+}
+
+// ══════════════════════════════════════════════════════════
+//  SHARED — Profile
+// ══════════════════════════════════════════════════════════
+function renderProfile(){
+  const el=g('tabContent');
+  el.innerHTML=`
+    <div class="panel" style="max-width:480px;">
+      <h3>👤 My Profile</h3>
+      <label>Name</label><input id="pN" value="${PROFILE.name||''}">
+      <label>Phone</label><input id="pP" value="${PROFILE.phone||''}">
+      <label>Email</label><input id="pE" value="${PROFILE.email||ME.email||''}" disabled style="opacity:.6;">
+      ${ROLE==='artist'?`
+        <label>UPI ID</label><input id="pU" value="${PROFILE.upiId||''}" placeholder="yourname@upi">
+        <label>Bio</label><textarea id="pB" style="min-height:70px;">${PROFILE.bio||''}</textarea>
+      `:''}
+      <div id="pM" class="msg"></div>
+      <button class="btn btn-accent" id="pSv">Save changes</button>
+      <hr class="divider" style="margin:20px 0;">
+      <h4>🔐 Change Password</h4>
+      <label>New password</label><input id="npw" type="password" minlength="6" placeholder="Min 6 chars">
+      <div id="pwM" class="msg"></div>
+      <button class="btn btn-outline" id="pwSv">Update password</button>
+    </div>`;
+
+  g('pSv').onclick=async()=>{
+    const data={name:g('pN').value.trim(),phone:g('pP').value.trim()};
+    if(ROLE==='artist'){data.upiId=g('pU').value.trim();data.bio=g('pB').value.trim();}
+    try{
+      await db.collection('users').doc(ME.uid).update(data);
+      PROFILE={...PROFILE,...data};
+      g('userName').textContent=data.name||ME.email;
+      toast('Profile saved!');
+    }catch(e){showMsg('pM','err',e.message);}
+  };
+
+  g('pwSv').onclick=async()=>{
+    const pw=g('npw').value;
+    if(pw.length<6){showMsg('pwM','err','Password must be 6+ characters.');return;}
+    try{
+      await ME.updatePassword(pw);
+      toast('Password updated!');g('npw').value='';
+    }catch(e){
+      if(e.code==='auth/requires-recent-login'){
+        showMsg('pwM','err','Please log out and log back in, then try again (security requirement).');
+      }else{showMsg('pwM','err',e.message);}
+    }
+  };
+}
+</script>
+</body>
+</html>
